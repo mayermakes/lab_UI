@@ -1,0 +1,1121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lab Control Interface</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+
+  :root {
+    --bg: #0d0f14;
+    --bg2: #13161e;
+    --bg3: #1a1e29;
+    --border: #252a38;
+    --border2: #303649;
+    --text: #e2e8f4;
+    --text2: #7b87a6;
+    --text3: #4a5568;
+    --accent-psu: #00d4aa;
+    --accent-mm: #4d9fff;
+    --accent-load: #ff6b35;
+    --accent-psu-dim: rgba(0,212,170,0.12);
+    --accent-mm-dim: rgba(77,159,255,0.12);
+    --accent-load-dim: rgba(255,107,53,0.12);
+    --green: #22c55e;
+    --red: #ef4444;
+    --yellow: #f59e0b;
+    --radius: 8px;
+    --mono: 'IBM Plex Mono', monospace;
+    --sans: 'IBM Plex Sans', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    min-height: 100vh;
+  }
+
+  /* ── Header ── */
+  header {
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    height: 52px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .logo {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .logo-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-psu); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  .header-right { display: flex; align-items: center; gap: 12px; }
+  .status-badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    padding: 3px 8px;
+    border-radius: 3px;
+    border: 1px solid;
+  }
+  .status-badge.connected { color: var(--green); border-color: rgba(34,197,94,0.3); background: rgba(34,197,94,0.08); }
+  .status-badge.disconnected { color: var(--text3); border-color: var(--border); background: transparent; }
+
+  /* ── Layout ── */
+  .main { display: grid; grid-template-columns: 280px 1fr; min-height: calc(100vh - 52px); }
+
+  /* ── Sidebar ── */
+  .sidebar {
+    background: var(--bg2);
+    border-right: 1px solid var(--border);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+  }
+  .sidebar-section-label {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--text3);
+    padding: 8px 4px 4px;
+  }
+
+  /* ── Config Panel ── */
+  .config-panel {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .config-panel label {
+    font-size: 10px;
+    font-family: var(--mono);
+    color: var(--text2);
+    letter-spacing: 0.05em;
+    display: block;
+    margin-bottom: 3px;
+  }
+  .config-panel input[type=text] {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 5px 8px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .config-panel input:focus { border-color: var(--border2); }
+
+  .btn {
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    padding: 7px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s;
+    width: 100%;
+    text-align: left;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .btn:hover { background: var(--border); border-color: var(--border2); }
+  .btn:active { opacity: 0.7; }
+  .btn.primary { border-color: rgba(0,212,170,0.4); color: var(--accent-psu); }
+  .btn.primary:hover { background: var(--accent-psu-dim); }
+  .btn.danger { border-color: rgba(239,68,68,0.4); color: var(--red); }
+  .btn.danger:hover { background: rgba(239,68,68,0.08); }
+
+  /* Saved configs list */
+  .saved-list { display: flex; flex-direction: column; gap: 4px; }
+  .saved-item {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .saved-item:hover { border-color: var(--border2); }
+  .saved-item-name { font-family: var(--mono); font-size: 11px; color: var(--text2); }
+  .saved-item-time { font-family: var(--mono); font-size: 9px; color: var(--text3); }
+  .saved-item-actions { display: flex; gap: 4px; }
+  .saved-item-actions button {
+    background: none; border: none; cursor: pointer; padding: 2px 5px;
+    font-size: 11px; border-radius: 3px; transition: background 0.1s;
+  }
+  .saved-item-actions button:hover { background: var(--border); }
+  .saved-item-actions .load-btn { color: var(--accent-psu); }
+  .saved-item-actions .del-btn { color: var(--red); }
+
+  /* ── Content ── */
+  .content { padding: 20px; display: flex; flex-direction: column; gap: 20px; overflow-y: auto; }
+
+  /* ── Device Cards ── */
+  .device-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+
+  .device-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+  .device-card:hover { border-color: var(--border2); }
+
+  .device-header {
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .device-title-group { display: flex; align-items: center; gap: 10px; }
+  .device-icon {
+    width: 32px; height: 32px; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px;
+  }
+  .device-icon.psu { background: var(--accent-psu-dim); }
+  .device-icon.mm { background: var(--accent-mm-dim); }
+  .device-icon.load { background: var(--accent-load-dim); }
+
+  .device-name { font-size: 13px; font-weight: 500; }
+  .device-model { font-family: var(--mono); font-size: 10px; color: var(--text2); margin-top: 1px; }
+  .device-ip { font-family: var(--mono); font-size: 10px; color: var(--text3); }
+
+  .conn-toggle {
+    background: none; border: 1px solid var(--border); border-radius: 4px;
+    color: var(--text2); font-family: var(--mono); font-size: 10px; letter-spacing: 0.05em;
+    padding: 4px 10px; cursor: pointer; transition: all 0.15s; white-space: nowrap;
+  }
+  .conn-toggle.connected { color: var(--green); border-color: rgba(34,197,94,0.3); background: rgba(34,197,94,0.06); }
+  .conn-toggle:hover { border-color: var(--border2); }
+
+  .device-body { padding: 16px; }
+
+  /* Channel tabs (PSU) */
+  .ch-tabs { display: flex; gap: 4px; margin-bottom: 14px; }
+  .ch-tab {
+    background: var(--bg3); border: 1px solid var(--border);
+    color: var(--text2); font-family: var(--mono); font-size: 10px;
+    padding: 4px 10px; border-radius: 4px; cursor: pointer; transition: all 0.1s;
+  }
+  .ch-tab.active { background: var(--accent-psu-dim); border-color: rgba(0,212,170,0.3); color: var(--accent-psu); }
+
+  /* Control rows */
+  .ctrl-row {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
+  }
+  .ctrl-label {
+    font-family: var(--mono); font-size: 10px; color: var(--text2);
+    width: 68px; flex-shrink: 0; letter-spacing: 0.04em;
+  }
+  .ctrl-slider { flex: 1; accent-color: var(--accent-psu); }
+  .ctrl-slider.mm { accent-color: var(--accent-mm); }
+  .ctrl-slider.load { accent-color: var(--accent-load); }
+  .ctrl-val {
+    font-family: var(--mono); font-size: 11px; color: var(--text);
+    width: 70px; text-align: right; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 3px 6px; outline: none;
+  }
+  .ctrl-val:focus { border-color: var(--border2); }
+  .ctrl-unit { font-family: var(--mono); font-size: 10px; color: var(--text3); width: 24px; flex-shrink: 0; }
+
+  /* Output toggle */
+  .output-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+  .out-toggle {
+    flex: 1; min-width: 80px; padding: 8px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--bg3);
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.04em;
+    cursor: pointer; transition: all 0.15s; display: flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .out-toggle .indicator { width: 6px; height: 6px; border-radius: 50%; background: var(--text3); transition: background 0.15s; }
+  .out-toggle.on .indicator { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .out-toggle.on { border-color: rgba(34,197,94,0.3); color: var(--green); background: rgba(34,197,94,0.06); }
+  .out-toggle.off { color: var(--text2); }
+
+  /* Measurement display */
+  .meas-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+  .meas-cell {
+    background: var(--bg3); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px 12px;
+  }
+  .meas-cell-label { font-family: var(--mono); font-size: 9px; color: var(--text3); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 4px; }
+  .meas-cell-val { font-family: var(--mono); font-size: 20px; font-weight: 500; color: var(--text); }
+  .meas-cell-unit { font-family: var(--mono); font-size: 11px; color: var(--text2); margin-left: 2px; }
+
+  /* Mode selector */
+  .mode-select {
+    background: var(--bg3); border: 1px solid var(--border); color: var(--text);
+    font-family: var(--mono); font-size: 11px; padding: 5px 8px; border-radius: 4px;
+    outline: none; cursor: pointer; width: 100%; margin-bottom: 12px;
+  }
+  .mode-select:focus { border-color: var(--border2); }
+
+  /* Apply button */
+  .apply-btn {
+    width: 100%; background: none; border: 1px solid rgba(0,212,170,0.3);
+    color: var(--accent-psu); font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em;
+    padding: 8px; border-radius: 4px; cursor: pointer; transition: all 0.15s; margin-top: 4px;
+  }
+  .apply-btn.mm { border-color: rgba(77,159,255,0.3); color: var(--accent-mm); }
+  .apply-btn.load { border-color: rgba(255,107,53,0.3); color: var(--accent-load); }
+  .apply-btn:hover { filter: brightness(1.2); }
+  .apply-btn:active { opacity: 0.6; }
+
+  /* ── Plot Section ── */
+  .plot-section { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .plot-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  }
+  .plot-title { font-size: 12px; font-weight: 500; font-family: var(--mono); color: var(--text2); letter-spacing: 0.06em; text-transform: uppercase; }
+  .plot-controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .plot-toggle {
+    font-family: var(--mono); font-size: 10px; padding: 3px 10px; border-radius: 3px;
+    border: 1px solid var(--border); background: none; cursor: pointer; transition: all 0.1s;
+  }
+  .plot-toggle.psu-color { color: var(--accent-psu); }
+  .plot-toggle.mm-color { color: var(--accent-mm); }
+  .plot-toggle.load-color { color: var(--accent-load); }
+  .plot-toggle.active { filter: brightness(1); background: rgba(255,255,255,0.05); border-color: var(--border2); }
+  .plot-toggle:not(.active) { opacity: 0.4; }
+  .poll-row { display: flex; align-items: center; gap: 8px; }
+  .poll-row label { font-family: var(--mono); font-size: 10px; color: var(--text3); }
+  .poll-select { background: var(--bg3); border: 1px solid var(--border); color: var(--text2); font-family: var(--mono); font-size: 10px; padding: 3px 6px; border-radius: 3px; outline: none; }
+  .poll-btn { font-family: var(--mono); font-size: 10px; padding: 4px 10px; border-radius: 3px; border: 1px solid var(--border); background: none; cursor: pointer; transition: all 0.1s; }
+  .poll-btn.running { color: var(--green); border-color: rgba(34,197,94,0.3); }
+  .poll-btn:not(.running) { color: var(--text2); }
+  .plot-area { padding: 12px 16px 16px; }
+  canvas { display: block; }
+
+  /* Log */
+  .log-section { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .log-header { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .log-title { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; color: var(--text3); text-transform: uppercase; }
+  .log-clear { background: none; border: none; color: var(--text3); font-family: var(--mono); font-size: 10px; cursor: pointer; }
+  .log-body { max-height: 140px; overflow-y: auto; padding: 8px 0; }
+  .log-entry { padding: 3px 16px; font-family: var(--mono); font-size: 11px; display: flex; gap: 12px; }
+  .log-time { color: var(--text3); flex-shrink: 0; }
+  .log-msg { color: var(--text2); }
+  .log-msg.ok { color: var(--green); }
+  .log-msg.err { color: var(--red); }
+  .log-msg.info { color: var(--accent-psu); }
+
+  /* Toast */
+  #toast {
+    position: fixed; bottom: 20px; right: 20px; z-index: 999;
+    background: var(--bg3); border: 1px solid var(--border2); border-radius: 6px;
+    padding: 10px 16px; font-family: var(--mono); font-size: 12px; color: var(--text);
+    pointer-events: none; opacity: 0; transition: opacity 0.2s; min-width: 200px;
+  }
+  #toast.show { opacity: 1; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+  input[type=range] { height: 4px; }
+</style>
+</head>
+<body>
+
+<div id="toast"></div>
+
+<header>
+  <div class="logo">
+    <div class="logo-dot" id="globalDot"></div>
+    LAB_CONTROL // MULTICOMP PRO
+  </div>
+  <div class="header-right">
+    <span class="status-badge disconnected" id="globalStatus">NO DEVICE CONNECTED</span>
+    <button class="btn" style="width:auto;padding:5px 12px;" onclick="downloadCurrentAsJSON()">⬇ EXPORT JSON</button>
+  </div>
+</header>
+
+<div class="main">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-section-label">Configuration</div>
+    <div class="config-panel">
+      <div>
+        <label>Config Name</label>
+        <input type="text" id="cfgName" placeholder="e.g. bench_test_01" value="config_01">
+      </div>
+      <button class="btn primary" onclick="saveConfig()">💾 SAVE CONFIG</button>
+      <button class="btn" onclick="exportAllConfigs()">📦 EXPORT ALL</button>
+      <button class="btn" onclick="document.getElementById('importFile').click()">📂 IMPORT JSON</button>
+      <input type="file" id="importFile" accept=".json" style="display:none" onchange="importConfigs(event)">
+    </div>
+
+    <div class="sidebar-section-label">Saved Configs</div>
+    <div class="saved-list" id="savedList">
+      <div style="font-family:var(--mono);font-size:10px;color:var(--text3);padding:6px 4px;">No saved configs yet.</div>
+    </div>
+
+    <div class="sidebar-section-label">API Endpoints</div>
+    <div class="config-panel">
+      <div>
+        <label>PSU Base URL</label>
+        <input type="text" id="psuUrl" value="http://localhost:5000" placeholder="http://localhost:5000">
+      </div>
+      <div>
+        <label>Multimeter Base URL</label>
+        <input type="text" id="mmUrl" value="http://localhost:5001" placeholder="http://localhost:5001">
+      </div>
+      <div>
+        <label>DC Load Base URL</label>
+        <input type="text" id="loadUrl" value="http://localhost:5002" placeholder="http://localhost:5002">
+      </div>
+      <button class="btn primary" onclick="pingAll()">⟳ PING ALL DEVICES</button>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <div class="content">
+
+    <!-- Device Cards -->
+    <div class="device-grid">
+
+      <!-- PSU Card -->
+      <div class="device-card" id="psuCard">
+        <div class="device-header">
+          <div class="device-title-group">
+            <div class="device-icon psu">⚡</div>
+            <div>
+              <div class="device-name">Power Supply</div>
+              <div class="device-model">MP711001 · 4-CH TCP</div>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+            <div class="device-ip" id="psuIp">192.168.1.100:5025</div>
+            <button class="conn-toggle" id="psuConnBtn" onclick="toggleConn('psu')">CONNECT</button>
+          </div>
+        </div>
+        <div class="device-body">
+          <div class="ch-tabs" id="psuChTabs">
+            <button class="ch-tab active" onclick="selectCh(1)">CH1</button>
+            <button class="ch-tab" onclick="selectCh(2)">CH2</button>
+            <button class="ch-tab" onclick="selectCh(3)">CH3</button>
+            <button class="ch-tab" onclick="selectCh(4)">CH4</button>
+          </div>
+          <div id="psuMeasGrid" class="meas-grid">
+            <div class="meas-cell"><div class="meas-cell-label">Voltage</div><div><span class="meas-cell-val" id="psuV">–</span><span class="meas-cell-unit">V</span></div></div>
+            <div class="meas-cell"><div class="meas-cell-label">Current</div><div><span class="meas-cell-val" id="psuI">–</span><span class="meas-cell-unit">A</span></div></div>
+          </div>
+          <div class="ctrl-row">
+            <span class="ctrl-label">VOLTAGE</span>
+            <input type="range" class="ctrl-slider" id="psuVSlider" min="0" max="32" step="0.1" value="5"
+              oninput="syncSlider('psuV_set','psuVSlider',2)" style="flex:1">
+            <input type="text" class="ctrl-val" id="psuV_set" value="5.00"
+              onchange="syncInput('psuVSlider','psuV_set',0,32)">
+            <span class="ctrl-unit">V</span>
+          </div>
+          <div class="ctrl-row">
+            <span class="ctrl-label">CURRENT</span>
+            <input type="range" class="ctrl-slider" id="psuISlider" min="0" max="5" step="0.01" value="1"
+              oninput="syncSlider('psuI_set','psuISlider',2)">
+            <input type="text" class="ctrl-val" id="psuI_set" value="1.00"
+              onchange="syncInput('psuISlider','psuI_set',0,5)">
+            <span class="ctrl-unit">A</span>
+          </div>
+          <div class="output-row" id="psuOutputs">
+            <button class="out-toggle off" id="psuOut1" onclick="toggleOutput('psu',1)"><span class="indicator"></span>CH1</button>
+            <button class="out-toggle off" id="psuOut2" onclick="toggleOutput('psu',2)"><span class="indicator"></span>CH2</button>
+            <button class="out-toggle off" id="psuOut3" onclick="toggleOutput('psu',3)"><span class="indicator"></span>CH3</button>
+            <button class="out-toggle off" id="psuOut4" onclick="toggleOutput('psu',4)"><span class="indicator"></span>CH4</button>
+          </div>
+          <button class="apply-btn" onclick="applyPSU()">APPLY TO CH <span id="psuChLabel">1</span></button>
+        </div>
+      </div>
+
+      <!-- Multimeter Card -->
+      <div class="device-card" id="mmCard">
+        <div class="device-header">
+          <div class="device-title-group">
+            <div class="device-icon mm">📐</div>
+            <div>
+              <div class="device-name">Multimeter</div>
+              <div class="device-model">MP730027 · TCP</div>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+            <div class="device-ip" id="mmIp">192.168.1.99:3000</div>
+            <button class="conn-toggle" id="mmConnBtn" onclick="toggleConn('mm')">CONNECT</button>
+          </div>
+        </div>
+        <div class="device-body">
+          <div class="meas-grid">
+            <div class="meas-cell" style="grid-column:1/-1">
+              <div class="meas-cell-label">Measurement</div>
+              <div><span class="meas-cell-val" id="mmVal" style="font-size:28px;">–</span><span class="meas-cell-unit" id="mmUnit">–</span></div>
+            </div>
+          </div>
+          <div class="ctrl-row">
+            <span class="ctrl-label">MODE</span>
+            <select class="mode-select" id="mmMode" style="flex:1;margin-bottom:0">
+              <option value="dc_voltage">DC Voltage</option>
+              <option value="ac_voltage">AC Voltage</option>
+              <option value="dc_current">DC Current</option>
+              <option value="ac_current">AC Current</option>
+              <option value="resistance">Resistance</option>
+              <option value="continuity">Continuity</option>
+              <option value="diode">Diode</option>
+              <option value="capacitance">Capacitance</option>
+              <option value="frequency">Frequency</option>
+              <option value="temperature">Temperature</option>
+            </select>
+          </div>
+          <div style="height:12px"></div>
+          <div class="output-row">
+            <button class="out-toggle off" id="mmAutoBtn" onclick="toggleMMauto()" style="flex:0 0 auto;padding:8px 14px">
+              <span class="indicator"></span>AUTO POLL
+            </button>
+          </div>
+          <button class="apply-btn mm" onclick="measureMM()" style="margin-top:10px">MEASURE NOW</button>
+        </div>
+      </div>
+
+      <!-- DC Load Card -->
+      <div class="device-card" id="loadCard">
+        <div class="device-header">
+          <div class="device-title-group">
+            <div class="device-icon load">🔋</div>
+            <div>
+              <div class="device-name">DC Load</div>
+              <div class="device-model">MP71077x · UDP</div>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+            <div class="device-ip" id="loadIp">192.168.1.80:18190</div>
+            <button class="conn-toggle" id="loadConnBtn" onclick="toggleConn('load')">CONNECT</button>
+          </div>
+        </div>
+        <div class="device-body">
+          <div class="meas-grid">
+            <div class="meas-cell"><div class="meas-cell-label">Voltage</div><div><span class="meas-cell-val" id="loadV">–</span><span class="meas-cell-unit">V</span></div></div>
+            <div class="meas-cell"><div class="meas-cell-label">Current</div><div><span class="meas-cell-val" id="loadI">–</span><span class="meas-cell-unit">A</span></div></div>
+          </div>
+          <div class="ctrl-row" style="margin-bottom:8px">
+            <span class="ctrl-label">MODE</span>
+            <select class="mode-select" id="loadMode" onchange="updateLoadMode()" style="flex:1;margin-bottom:0">
+              <option value="cc">CC – Constant Current</option>
+              <option value="cv">CV – Constant Voltage</option>
+              <option value="cp">CP – Constant Power</option>
+              <option value="cr">CR – Constant Resistance</option>
+            </select>
+          </div>
+          <div class="ctrl-row" id="loadCtrlRow">
+            <span class="ctrl-label" id="loadCtrlLabel">CURRENT</span>
+            <input type="range" class="ctrl-slider load" id="loadValSlider" min="0" max="20" step="0.1" value="1"
+              oninput="syncSlider('loadVal_set','loadValSlider',2)">
+            <input type="text" class="ctrl-val" id="loadVal_set" value="1.00"
+              onchange="syncInput('loadValSlider','loadVal_set',0,20)">
+            <span class="ctrl-unit" id="loadCtrlUnit">A</span>
+          </div>
+          <div class="output-row">
+            <button class="out-toggle off" id="loadOnBtn" onclick="toggleOutput('load',0)" style="flex:1">
+              <span class="indicator"></span>LOAD ON
+            </button>
+          </div>
+          <button class="apply-btn load" onclick="applyLoad()">APPLY SETTINGS</button>
+        </div>
+      </div>
+
+    </div><!-- /device-grid -->
+
+    <!-- Chart Section -->
+    <div class="plot-section">
+      <div class="plot-header">
+        <div class="plot-title">Live Measurements</div>
+        <div class="plot-controls">
+          <button class="plot-toggle psu-color active" id="togPsuV" onclick="toggleSeries('psuV')">PSU V</button>
+          <button class="plot-toggle psu-color active" id="togPsuI" onclick="toggleSeries('psuI')">PSU I</button>
+          <button class="plot-toggle mm-color active" id="togMmVal" onclick="toggleSeries('mmVal')">MM</button>
+          <button class="plot-toggle load-color active" id="togLoadV" onclick="toggleSeries('loadV')">LOAD V</button>
+          <button class="plot-toggle load-color active" id="togLoadI" onclick="toggleSeries('loadI')">LOAD I</button>
+          <div class="poll-row">
+            <label>POLL</label>
+            <select class="poll-select" id="pollInterval">
+              <option value="500">0.5s</option>
+              <option value="1000" selected>1s</option>
+              <option value="2000">2s</option>
+              <option value="5000">5s</option>
+              <option value="10000">10s</option>
+            </select>
+            <button class="poll-btn" id="pollBtn" onclick="togglePolling()">▶ START</button>
+            <button class="btn" style="width:auto;padding:4px 10px;font-size:10px" onclick="clearChart()">CLEAR</button>
+          </div>
+        </div>
+      </div>
+      <div class="plot-area">
+        <canvas id="liveChart" height="220"></canvas>
+      </div>
+    </div>
+
+    <!-- Log -->
+    <div class="log-section">
+      <div class="log-header">
+        <span class="log-title">API Log</span>
+        <button class="log-clear" onclick="clearLog()">CLEAR</button>
+      </div>
+      <div class="log-body" id="logBody"></div>
+    </div>
+
+  </div><!-- /content -->
+</div>
+
+<script>
+// ──────────────────────────────────────────────
+// State
+// ──────────────────────────────────────────────
+const state = {
+  psu: { connected: false, channel: 1, outputs: {1:false,2:false,3:false,4:false} },
+  mm:  { connected: false, autoPoll: false },
+  load:{ connected: false, outputOn: false },
+  polling: false,
+  pollTimer: null,
+  chartTimer: null,
+};
+
+// ──────────────────────────────────────────────
+// Chart Setup
+// ──────────────────────────────────────────────
+const MAX_POINTS = 120;
+const chartData = {
+  labels: [],
+  psuV: [], psuI: [], mmVal: [], loadV: [], loadI: []
+};
+const seriesVisible = { psuV:true, psuI:true, mmVal:true, loadV:true, loadI:true };
+
+const ctx = document.getElementById('liveChart').getContext('2d');
+const liveChart = new Chart(ctx, {
+  type: 'line',
+  data: {
+    labels: chartData.labels,
+    datasets: [
+      { label:'PSU Voltage (V)', data: chartData.psuV, borderColor:'#00d4aa', backgroundColor:'rgba(0,212,170,0.05)', borderWidth:1.5, pointRadius:0, tension:0.3, yAxisID:'y' },
+      { label:'PSU Current (A)', data: chartData.psuI, borderColor:'rgba(0,212,170,0.5)', backgroundColor:'transparent', borderWidth:1.5, pointRadius:0, tension:0.3, yAxisID:'y2', borderDash:[4,3] },
+      { label:'MM Value', data: chartData.mmVal, borderColor:'#4d9fff', backgroundColor:'rgba(77,159,255,0.05)', borderWidth:1.5, pointRadius:0, tension:0.3, yAxisID:'y' },
+      { label:'Load Voltage (V)', data: chartData.loadV, borderColor:'#ff6b35', backgroundColor:'rgba(255,107,53,0.05)', borderWidth:1.5, pointRadius:0, tension:0.3, yAxisID:'y' },
+      { label:'Load Current (A)', data: chartData.loadI, borderColor:'rgba(255,107,53,0.5)', backgroundColor:'transparent', borderWidth:1.5, pointRadius:0, tension:0.3, yAxisID:'y2', borderDash:[4,3] },
+    ]
+  },
+  options: {
+    responsive: true,
+    animation: false,
+    interaction: { mode:'index', intersect:false },
+    plugins: {
+      legend: { display:true, labels:{ color:'#7b87a6', font:{family:'IBM Plex Mono',size:10}, boxWidth:12, padding:16 } },
+      tooltip: { backgroundColor:'#1a1e29', borderColor:'#252a38', borderWidth:1, titleColor:'#e2e8f4', bodyColor:'#7b87a6', titleFont:{family:'IBM Plex Mono',size:11}, bodyFont:{family:'IBM Plex Mono',size:11} }
+    },
+    scales: {
+      x: { ticks:{ color:'#4a5568', font:{family:'IBM Plex Mono',size:9}, maxRotation:0, maxTicksLimit:10 }, grid:{ color:'rgba(37,42,56,0.8)' } },
+      y: { position:'left', ticks:{ color:'#7b87a6', font:{family:'IBM Plex Mono',size:10} }, grid:{ color:'rgba(37,42,56,0.8)' } },
+      y2: { position:'right', ticks:{ color:'rgba(123,135,166,0.5)', font:{family:'IBM Plex Mono',size:10} }, grid:{ drawOnChartArea:false } }
+    }
+  }
+});
+
+function toggleSeries(key) {
+  seriesVisible[key] = !seriesVisible[key];
+  const idxMap = {psuV:0,psuI:1,mmVal:2,loadV:3,loadI:4};
+  const idx = idxMap[key];
+  liveChart.data.datasets[idx].hidden = !seriesVisible[key];
+  liveChart.update('none');
+  const btn = document.getElementById('tog'+key.charAt(0).toUpperCase()+key.slice(1));
+  if(btn) btn.classList.toggle('active', seriesVisible[key]);
+}
+
+function pushChartPoint(psuV, psuI, mmV, loadV, loadI) {
+  const t = new Date().toLocaleTimeString('de-AT',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  chartData.labels.push(t);
+  chartData.psuV.push(psuV);
+  chartData.psuI.push(psuI);
+  chartData.mmVal.push(mmV);
+  chartData.loadV.push(loadV);
+  chartData.loadI.push(loadI);
+  if(chartData.labels.length > MAX_POINTS) {
+    chartData.labels.shift(); chartData.psuV.shift(); chartData.psuI.shift();
+    chartData.mmVal.shift(); chartData.loadV.shift(); chartData.loadI.shift();
+  }
+  liveChart.update('none');
+}
+
+function clearChart() {
+  ['labels','psuV','psuI','mmVal','loadV','loadI'].forEach(k => chartData[k].length = 0);
+  liveChart.update();
+}
+
+// ──────────────────────────────────────────────
+// API Helpers
+// ──────────────────────────────────────────────
+function baseUrl(dev) {
+  const map = { psu: document.getElementById('psuUrl').value, mm: document.getElementById('mmUrl').value, load: document.getElementById('loadUrl').value };
+  return (map[dev]||'').replace(/\/$/,'');
+}
+
+async function apiCall(dev, path, method='GET', body=null) {
+  const url = baseUrl(dev) + path;
+  const opts = { method, headers:{'Content-Type':'application/json'} };
+  if(body) opts.body = JSON.stringify(body);
+  try {
+    const r = await fetch(url, opts);
+    const data = await r.json();
+    log(method+' '+path + ' → ' + r.status, r.ok ? 'ok' : 'err');
+    return { ok: r.ok, data };
+  } catch(e) {
+    log(method+' '+path + ' → '+e.message, 'err');
+    return { ok: false, data: null };
+  }
+}
+
+// ──────────────────────────────────────────────
+// Connection
+// ──────────────────────────────────────────────
+async function toggleConn(dev) {
+  if(state[dev].connected) {
+    state[dev].connected = false;
+    updateConnUI(dev);
+    log(dev.toUpperCase()+' disconnected', 'info');
+  } else {
+    log('Connecting to '+dev.toUpperCase()+'...', 'info');
+    const r = await apiCall(dev, '/status');
+    state[dev].connected = r.ok;
+    updateConnUI(dev);
+    if(r.ok) {
+      log(dev.toUpperCase()+' connected OK', 'ok');
+      toast(dev.toUpperCase()+' connected');
+    } else {
+      toast('Could not connect to '+dev.toUpperCase(), true);
+    }
+  }
+  updateGlobalStatus();
+}
+
+function updateConnUI(dev) {
+  const btn = document.getElementById(dev+'ConnBtn');
+  if(!btn) return;
+  if(state[dev].connected) { btn.textContent='CONNECTED'; btn.className='conn-toggle connected'; }
+  else { btn.textContent='CONNECT'; btn.className='conn-toggle'; }
+}
+
+function updateGlobalStatus() {
+  const any = state.psu.connected || state.mm.connected || state.load.connected;
+  const el = document.getElementById('globalStatus');
+  const dot = document.getElementById('globalDot');
+  if(any) {
+    const devs = ['PSU','MM','LOAD'].filter((_,i)=>[state.psu,state.mm,state.load][i].connected).join('+');
+    el.textContent = devs+' ONLINE'; el.className='status-badge connected';
+    dot.style.background='var(--green)';
+  } else {
+    el.textContent='NO DEVICE CONNECTED'; el.className='status-badge disconnected';
+    dot.style.background='var(--accent-psu)';
+  }
+}
+
+async function pingAll() {
+  log('Pinging all devices...','info');
+  for(const dev of ['psu','mm','load']) {
+    const r = await apiCall(dev,'/status');
+    state[dev].connected = r.ok;
+    updateConnUI(dev);
+  }
+  updateGlobalStatus();
+  toast('Ping complete');
+}
+
+// ──────────────────────────────────────────────
+// PSU Controls
+// ──────────────────────────────────────────────
+function selectCh(ch) {
+  state.psu.channel = ch;
+  document.querySelectorAll('.ch-tab').forEach((t,i)=>t.classList.toggle('active',i+1===ch));
+  document.getElementById('psuChLabel').textContent = ch;
+  refreshPSU();
+}
+
+async function applyPSU() {
+  const ch = state.psu.channel;
+  const v = parseFloat(document.getElementById('psuV_set').value);
+  const c = parseFloat(document.getElementById('psuI_set').value);
+  await apiCall('psu',`/channel/${ch}/voltage`,'POST',{voltage:v});
+  await apiCall('psu',`/channel/${ch}/current`,'POST',{current:c});
+  toast(`CH${ch} → ${v.toFixed(2)}V / ${c.toFixed(2)}A`);
+  refreshPSU();
+}
+
+async function toggleOutput(dev, ch) {
+  if(dev==='psu') {
+    const on = !state.psu.outputs[ch];
+    await apiCall('psu', `/channel/${ch}/output`, 'POST', {output: on ? 'on':'off'});
+    state.psu.outputs[ch] = on;
+    const btn = document.getElementById(`psuOut${ch}`);
+    btn.className = 'out-toggle '+(on?'on':'off');
+  } else if(dev==='load') {
+    const on = !state.load.outputOn;
+    await apiCall('load', on ? '/load/on':'/load/off', 'POST');
+    state.load.outputOn = on;
+    const btn = document.getElementById('loadOnBtn');
+    btn.className = 'out-toggle '+(on?'on':'off');
+  }
+}
+
+async function refreshPSU() {
+  if(!state.psu.connected) return;
+  const r = await apiCall('psu', `/channel/${state.psu.channel}/measure`);
+  if(r.ok && r.data) {
+    const v = parseFloat(r.data.voltage||0);
+    const i = parseFloat(r.data.current||0);
+    document.getElementById('psuV').textContent = v.toFixed(3);
+    document.getElementById('psuI').textContent = i.toFixed(4);
+    return [v,i];
+  }
+  return [null,null];
+}
+
+// ──────────────────────────────────────────────
+// Multimeter
+// ──────────────────────────────────────────────
+const mmUnits = {dc_voltage:'V',ac_voltage:'V',dc_current:'A',ac_current:'A',resistance:'Ω',continuity:'Ω',diode:'V',capacitance:'F',frequency:'Hz',temperature:'°C'};
+
+async function measureMM() {
+  if(!state.mm.connected) { toast('Multimeter not connected',true); return; }
+  const mode = document.getElementById('mmMode').value;
+  const r = await apiCall('mm', '/measure/'+mode);
+  if(r.ok && r.data) {
+    const val = parseFloat(r.data.value||r.data.measurement||0);
+    document.getElementById('mmVal').textContent = val.toFixed(4);
+    document.getElementById('mmUnit').textContent = mmUnits[mode]||'';
+    return val;
+  }
+  return null;
+}
+
+let mmAutoTimer = null;
+function toggleMMauto() {
+  state.mm.autoPoll = !state.mm.autoPoll;
+  const btn = document.getElementById('mmAutoBtn');
+  btn.className = 'out-toggle '+(state.mm.autoPoll?'on':'off');
+  if(state.mm.autoPoll) { mmAutoTimer = setInterval(measureMM, 500); }
+  else { clearInterval(mmAutoTimer); }
+}
+
+// ──────────────────────────────────────────────
+// DC Load
+// ──────────────────────────────────────────────
+const loadModeConfig = {
+  cc: {label:'CURRENT', unit:'A', max:20, step:0.1},
+  cv: {label:'VOLTAGE', unit:'V', max:150, step:0.1},
+  cp: {label:'POWER',   unit:'W', max:300, step:1},
+  cr: {label:'RESIST.', unit:'Ω', max:500, step:1},
+};
+
+function updateLoadMode() {
+  const mode = document.getElementById('loadMode').value;
+  const cfg = loadModeConfig[mode];
+  document.getElementById('loadCtrlLabel').textContent = cfg.label;
+  document.getElementById('loadCtrlUnit').textContent = cfg.unit;
+  const sl = document.getElementById('loadValSlider');
+  sl.max = cfg.max; sl.step = cfg.step; sl.value = 1;
+  syncSlider('loadVal_set','loadValSlider',2);
+}
+
+async function applyLoad() {
+  const mode = document.getElementById('loadMode').value;
+  const val = parseFloat(document.getElementById('loadVal_set').value);
+  await apiCall('load', '/mode', 'POST', {mode});
+  await apiCall('load', '/setpoint', 'POST', {value:val});
+  toast(`Load: ${mode.toUpperCase()} @ ${val.toFixed(2)}`);
+  refreshLoad();
+}
+
+async function refreshLoad() {
+  if(!state.load.connected) return [null,null];
+  const r = await apiCall('load','/measure');
+  if(r.ok && r.data) {
+    const v = parseFloat(r.data.voltage||0);
+    const i = parseFloat(r.data.current||0);
+    document.getElementById('loadV').textContent = v.toFixed(3);
+    document.getElementById('loadI').textContent = i.toFixed(4);
+    return [v,i];
+  }
+  return [null,null];
+}
+
+// ──────────────────────────────────────────────
+// Polling / Chart
+// ──────────────────────────────────────────────
+async function doPoll() {
+  const [pv, pi] = state.psu.connected ? (await refreshPSU()||[null,null]) : [null,null];
+  const mmV = state.mm.connected ? await measureMM() : null;
+  const [lv, li] = await refreshLoad();
+  pushChartPoint(pv, pi, mmV, lv, li);
+}
+
+function togglePolling() {
+  state.polling = !state.polling;
+  const btn = document.getElementById('pollBtn');
+  if(state.polling) {
+    const ms = parseInt(document.getElementById('pollInterval').value);
+    state.pollTimer = setInterval(doPoll, ms);
+    btn.textContent = '■ STOP'; btn.className = 'poll-btn running';
+    log('Polling started', 'info');
+  } else {
+    clearInterval(state.pollTimer);
+    btn.textContent = '▶ START'; btn.className = 'poll-btn';
+    log('Polling stopped', 'info');
+  }
+}
+
+// ──────────────────────────────────────────────
+// Slider sync
+// ──────────────────────────────────────────────
+function syncSlider(inputId, sliderId, decimals) {
+  const sl = document.getElementById(sliderId);
+  document.getElementById(inputId).value = parseFloat(sl.value).toFixed(decimals);
+}
+function syncInput(sliderId, inputId, min, max) {
+  let val = parseFloat(document.getElementById(inputId).value);
+  if(isNaN(val)) val = min;
+  val = Math.max(min, Math.min(max, val));
+  document.getElementById(sliderId).value = val;
+  document.getElementById(inputId).value = val.toFixed(2);
+}
+
+// ──────────────────────────────────────────────
+// Config Save / Load
+// ──────────────────────────────────────────────
+function getFullConfig() {
+  return {
+    timestamp: new Date().toISOString(),
+    apiUrls: {
+      psu: document.getElementById('psuUrl').value,
+      mm: document.getElementById('mmUrl').value,
+      load: document.getElementById('loadUrl').value,
+    },
+    psu: {
+      channel: state.psu.channel,
+      voltage: parseFloat(document.getElementById('psuV_set').value),
+      current: parseFloat(document.getElementById('psuI_set').value),
+      outputs: {...state.psu.outputs},
+    },
+    mm: {
+      mode: document.getElementById('mmMode').value,
+    },
+    load: {
+      mode: document.getElementById('loadMode').value,
+      value: parseFloat(document.getElementById('loadVal_set').value),
+      outputOn: state.load.outputOn,
+    },
+    pollInterval: parseInt(document.getElementById('pollInterval').value),
+  };
+}
+
+function applyConfig(cfg) {
+  if(cfg.apiUrls) {
+    if(cfg.apiUrls.psu) document.getElementById('psuUrl').value = cfg.apiUrls.psu;
+    if(cfg.apiUrls.mm) document.getElementById('mmUrl').value = cfg.apiUrls.mm;
+    if(cfg.apiUrls.load) document.getElementById('loadUrl').value = cfg.apiUrls.load;
+  }
+  if(cfg.psu) {
+    selectCh(cfg.psu.channel||1);
+    document.getElementById('psuV_set').value = (cfg.psu.voltage||0).toFixed(2);
+    document.getElementById('psuVSlider').value = cfg.psu.voltage||0;
+    document.getElementById('psuI_set').value = (cfg.psu.current||0).toFixed(2);
+    document.getElementById('psuISlider').value = cfg.psu.current||0;
+    if(cfg.psu.outputs) {
+      for(let ch=1;ch<=4;ch++) {
+        state.psu.outputs[ch] = !!cfg.psu.outputs[ch];
+        const btn = document.getElementById(`psuOut${ch}`);
+        if(btn) btn.className = 'out-toggle '+(state.psu.outputs[ch]?'on':'off');
+      }
+    }
+  }
+  if(cfg.mm) {
+    document.getElementById('mmMode').value = cfg.mm.mode||'dc_voltage';
+  }
+  if(cfg.load) {
+    document.getElementById('loadMode').value = cfg.load.mode||'cc';
+    updateLoadMode();
+    document.getElementById('loadVal_set').value = (cfg.load.value||1).toFixed(2);
+    document.getElementById('loadValSlider').value = cfg.load.value||1;
+    state.load.outputOn = !!cfg.load.outputOn;
+    document.getElementById('loadOnBtn').className = 'out-toggle '+(state.load.outputOn?'on':'off');
+  }
+  if(cfg.pollInterval) document.getElementById('pollInterval').value = cfg.pollInterval;
+}
+
+function saveConfig() {
+  const name = document.getElementById('cfgName').value.trim() || ('config_'+Date.now());
+  const cfg = getFullConfig();
+  const stored = getSavedConfigs();
+  stored[name] = cfg;
+  localStorage.setItem('labConfigs', JSON.stringify(stored));
+  renderSavedList();
+  toast('Saved: '+name);
+  log('Config saved: '+name, 'ok');
+}
+
+function getSavedConfigs() {
+  try { return JSON.parse(localStorage.getItem('labConfigs')||'{}'); } catch { return {}; }
+}
+
+function loadConfig(name) {
+  const stored = getSavedConfigs();
+  if(stored[name]) {
+    applyConfig(stored[name]);
+    toast('Loaded: '+name);
+    log('Config loaded: '+name, 'info');
+  }
+}
+
+function deleteConfig(name) {
+  const stored = getSavedConfigs();
+  delete stored[name];
+  localStorage.setItem('labConfigs', JSON.stringify(stored));
+  renderSavedList();
+  toast('Deleted: '+name);
+}
+
+function renderSavedList() {
+  const stored = getSavedConfigs();
+  const keys = Object.keys(stored);
+  const el = document.getElementById('savedList');
+  if(!keys.length) {
+    el.innerHTML = '<div style="font-family:var(--mono);font-size:10px;color:var(--text3);padding:6px 4px;">No saved configs yet.</div>';
+    return;
+  }
+  el.innerHTML = keys.map(k => {
+    const ts = stored[k].timestamp ? new Date(stored[k].timestamp).toLocaleString('de-AT',{month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
+    return `<div class="saved-item">
+      <div><div class="saved-item-name">${k}</div><div class="saved-item-time">${ts}</div></div>
+      <div class="saved-item-actions">
+        <button class="load-btn" title="Load" onclick="loadConfig('${k.replace(/'/g,"\\'")}')">↑ load</button>
+        <button class="del-btn" title="Delete" onclick="deleteConfig('${k.replace(/'/g,"\\'")}')">✕</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function exportAllConfigs() {
+  const stored = getSavedConfigs();
+  downloadJSON(stored, 'lab_configs_all.json');
+}
+
+function downloadCurrentAsJSON() {
+  const cfg = getFullConfig();
+  const name = document.getElementById('cfgName').value.trim() || 'config';
+  downloadJSON({[name]: cfg}, name+'.json');
+}
+
+function downloadJSON(data, filename) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  log('Exported '+filename, 'ok');
+}
+
+function importConfigs(e) {
+  const file = e.target.files[0];
+  if(!file) return;
+  const r = new FileReader();
+  r.onload = ev => {
+    try {
+      const data = JSON.parse(ev.target.result);
+      const stored = getSavedConfigs();
+      // Accept either {name:{cfg}} or just {cfg} shape
+      if(data.timestamp) {
+        // single config
+        const name = file.name.replace('.json','');
+        stored[name] = data;
+      } else {
+        Object.assign(stored, data);
+      }
+      localStorage.setItem('labConfigs', JSON.stringify(stored));
+      renderSavedList();
+      toast('Imported '+Object.keys(data).length+' config(s)');
+      log('Imported '+file.name, 'ok');
+    } catch { toast('Invalid JSON file', true); }
+  };
+  r.readAsText(file);
+  e.target.value='';
+}
+
+// ──────────────────────────────────────────────
+// Log
+// ──────────────────────────────────────────────
+function log(msg, type='') {
+  const el = document.getElementById('logBody');
+  const t = new Date().toLocaleTimeString('de-AT',{hour12:false});
+  const div = document.createElement('div');
+  div.className = 'log-entry';
+  div.innerHTML = `<span class="log-time">${t}</span><span class="log-msg ${type}">${msg}</span>`;
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+  while(el.children.length > 200) el.removeChild(el.firstChild);
+}
+function clearLog() { document.getElementById('logBody').innerHTML=''; }
+
+// ──────────────────────────────────────────────
+// Toast
+// ──────────────────────────────────────────────
+let toastTimer;
+function toast(msg, err=false) {
+  const el = document.getElementById('toast');
+  el.textContent = (err?'✗ ':'✓ ') + msg;
+  el.style.borderColor = err ? 'rgba(239,68,68,0.3)' : 'rgba(0,212,170,0.3)';
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>el.classList.remove('show'), 2500);
+}
+
+// ──────────────────────────────────────────────
+// Init
+// ──────────────────────────────────────────────
+renderSavedList();
+log('Lab Control Interface ready', 'info');
+log('Configure API URLs in the sidebar, then click PING ALL DEVICES', 'info');
+</script>
+</body>
+</html>
