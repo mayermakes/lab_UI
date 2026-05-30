@@ -3,7 +3,7 @@
 A browser-based instrument control panel for the [lab_api](https://github.com/mayermakes/lab_api) project. Control and monitor your Multicomp Pro bench equipment from any browser on the same network — no driver installation needed on the client side.
 
 <img width="1765" height="891" alt="Bildschirmfoto vom 2026-05-30 14-23-44" src="https://github.com/user-attachments/assets/88afb25b-14d7-4c24-9108-6a195e161d12" />
-
+## this repo contains the UI, API and device drivers.
 ---
 
 ## Supported instruments
