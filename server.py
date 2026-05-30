@@ -202,8 +202,22 @@ def _stub_mm_measure(mode):
 
 def _stub_dcl_measure():
     s = _stub_state["dcl"]
-    v = _stub_noise(5.0) if s["load_on"] else 0.0
-    i = _stub_noise(s["set_value"]) if s["load_on"] and s["mode"] == "CC" else 0.0
+    if not s["load_on"]:
+        return {"voltage": 0.0, "current": 0.0}
+    mode = s["mode"]
+    sv   = s["set_value"]
+    if mode == "CC":
+        i = _stub_noise(sv)
+        v = _stub_noise(5.0)
+    elif mode == "CV":
+        v = _stub_noise(sv)
+        i = _stub_noise(1.0)
+    elif mode == "CP":
+        v = _stub_noise(5.0)
+        i = round(sv / max(v, 0.001), 3)
+    else:  # CR
+        v = _stub_noise(5.0)
+        i = round(v / max(sv, 0.001), 3)
     return {"voltage": round(v, 3), "current": round(i, 3)}
 
 
@@ -269,7 +283,8 @@ def psu_set_voltage(ch):
         log.info(f"[STUB] PSU CH{ch} voltage → {v}V")
         return ok({"channel": ch, "voltage": v})
     try:
-        device_call(dm.psu, dm.reset_psu, lambda d, *_: d.set_voltage(ch, v))
+        # use default arg binding to capture ch/v at call time, not closure time
+        device_call(dm.psu, dm.reset_psu, lambda d, _ch=ch, _v=v: d.set_voltage(_ch, _v))
         log.info(f"PSU CH{ch} voltage → {v}V")
         return ok({"channel": ch, "voltage": v})
     except Exception as e:
@@ -290,7 +305,7 @@ def psu_set_current(ch):
         log.info(f"[STUB] PSU CH{ch} current → {i}A")
         return ok({"channel": ch, "current": i})
     try:
-        device_call(dm.psu, dm.reset_psu, lambda d, *_: d.set_current(ch, i))
+        device_call(dm.psu, dm.reset_psu, lambda d, _ch=ch, _i=i: d.set_current(_ch, _i))
         log.info(f"PSU CH{ch} current → {i}A")
         return ok({"channel": ch, "current": i})
     except Exception as e:
@@ -299,11 +314,13 @@ def psu_set_current(ch):
 
 @app.route("/api/psu/channel/<int:ch>/output_on", methods=["POST"])
 def psu_output_on(ch):
+    if ch not in range(1, 5):
+        return err("Channel must be 1–4", 400)
     if STUB_MODE:
         _stub_state["psu"]["channels"][ch]["output"] = True
         return ok({"channel": ch, "output": True})
     try:
-        device_call(dm.psu, dm.reset_psu, lambda d, *_: d.output_on(ch))
+        device_call(dm.psu, dm.reset_psu, lambda d, _ch=ch: d.output_on(_ch))
         log.info(f"PSU CH{ch} OUTPUT ON")
         return ok({"channel": ch, "output": True})
     except Exception as e:
@@ -312,11 +329,13 @@ def psu_output_on(ch):
 
 @app.route("/api/psu/channel/<int:ch>/output_off", methods=["POST"])
 def psu_output_off(ch):
+    if ch not in range(1, 5):
+        return err("Channel must be 1–4", 400)
     if STUB_MODE:
         _stub_state["psu"]["channels"][ch]["output"] = False
         return ok({"channel": ch, "output": False})
     try:
-        device_call(dm.psu, dm.reset_psu, lambda d, *_: d.output_off(ch))
+        device_call(dm.psu, dm.reset_psu, lambda d, _ch=ch: d.output_off(_ch))
         log.info(f"PSU CH{ch} OUTPUT OFF")
         return ok({"channel": ch, "output": False})
     except Exception as e:
@@ -325,10 +344,12 @@ def psu_output_off(ch):
 
 @app.route("/api/psu/channel/<int:ch>/measure")
 def psu_measure(ch):
+    if ch not in range(1, 5):
+        return err("Channel must be 1–4", 400)
     if STUB_MODE:
         return ok(_stub_psu_measure(ch))
     try:
-        result = device_call(dm.psu, dm.reset_psu, lambda d, *_: d.measure(ch))
+        result = device_call(dm.psu, dm.reset_psu, lambda d, _ch=ch: d.measure(_ch))
         # driver returns {"channel": int, "voltage": str|float, "current": str|float}
         return ok({
             "channel": ch,
@@ -381,7 +402,7 @@ def mm_measure(mode):
         return ok(_stub_mm_measure(mode))
     try:
         method_name = MM_MODE_MAP[mode]
-        raw = device_call(dm.mm, dm.reset_mm, lambda d, *_: getattr(d, method_name)())
+        raw = device_call(dm.mm, dm.reset_mm, lambda d, _m=method_name: getattr(d, _m)())
         # Driver returns a float or a string; normalise to float
         value = float(raw) if raw is not None else 0.0
         log.debug(f"MM {mode} = {value}")
@@ -442,7 +463,7 @@ def dcl_set_mode():
         return ok({"mode": mode})
     try:
         fn_name = DCL_MODE_FN[mode]
-        device_call(dm.dcl, dm.reset_dcl, lambda d, *_: getattr(d, fn_name)())
+        device_call(dm.dcl, dm.reset_dcl, lambda d, _fn=fn_name: getattr(d, _fn)())
         log.info(f"DCLoad mode → {mode}")
         return ok({"mode": mode})
     except Exception as e:
@@ -464,7 +485,7 @@ def dcl_set_value(parameter):
         return ok({"parameter": parameter, "value": value})
     try:
         fn_name = DCL_SET_FN[parameter]
-        device_call(dm.dcl, dm.reset_dcl, lambda d, *_: getattr(d, fn_name)(value))
+        device_call(dm.dcl, dm.reset_dcl, lambda d, _fn=fn_name, _v=value: getattr(d, _fn)(_v))
         log.info(f"DCLoad {parameter} → {value}")
         return ok({"parameter": parameter, "value": value})
     except Exception as e:
