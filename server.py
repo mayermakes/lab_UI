@@ -1,25 +1,21 @@
 #!/usr/bin/env python3
 """
-server.py — Unified Flask server for lab_api
-Serves lab_control.html and provides REST endpoints for:
-  - MP711001  PSU       → /api/psu/...       (port 5000)
-  - MP730027  Multimeter → /api/mm/...        (port 5000)
-  - MP71077x  DC Load   → /api/dcload/...     (port 5000)
+server.py — Unified Flask server with dynamic device discovery for lab_api
 
-All three devices share one Flask app on one port.
-The HTML frontend hits:
-  http://<host>:5000/api/psu/...
-  http://<host>:5000/api/mm/...
-  http://<host>:5000/api/dcload/...
+This server automatically discovers available lab devices and exposes them via REST endpoints.
+Devices are detected by scanning lab_api modules for device_config.py files.
+
+Features:
+  - Automatic device discovery (TCP and UDP)
+  - Dynamic Flask endpoint generation
+  - Configuration management for IP/port
+  - Manual UDP device support
+  - Graceful fallback to stub mode if drivers unavailable
 
 Run:
-  pip install flask flask-cors
-  python server.py [--psu-ip 192.168.1.100] [--mm-ip 192.168.1.99] [--dcl-ip 192.168.1.80] [--port 5000]
+  python server.py [--port 5000] [--debug]
 
-Hardware defaults (from lab_api README):
-  PSU  MP711001  192.168.1.100  TCP :5025
-  MM   MP730027  192.168.1.99   TCP :3000
-  DCL  MP71077x  192.168.1.80   UDP :18190
+The frontend fetches /api/discover to get available devices, then dynamically generates UI.
 """
 
 import argparse
@@ -28,23 +24,23 @@ import sys
 import time
 import threading
 import logging
+import json
+import socket
+import importlib
 from pathlib import Path
+from typing import Dict, List, Any, Optional, Tuple
+from dataclasses import dataclass, asdict
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CLI args — override device IPs at startup
+# CLI args
 # ─────────────────────────────────────────────────────────────────────────────
-parser = argparse.ArgumentParser(description="Lab API unified server")
-parser.add_argument("--psu-ip",  default="192.168.1.100", help="PSU IP")
-parser.add_argument("--psu-port",default=5025, type=int,  help="PSU TCP port")
-parser.add_argument("--mm-ip",   default="192.168.1.99",  help="Multimeter IP")
-parser.add_argument("--mm-port", default=3000, type=int,  help="Multimeter TCP port")
-parser.add_argument("--dcl-ip",  default="192.168.1.80",  help="DC Load IP")
-parser.add_argument("--dcl-port",default=18190,type=int,  help="DC Load UDP port")
-parser.add_argument("--port",    default=5000, type=int,  help="Flask server port")
-parser.add_argument("--debug",   action="store_true",     help="Flask debug mode")
+parser = argparse.ArgumentParser(description="Lab API unified server with device discovery")
+parser.add_argument("--port", default=5000, type=int, help="Flask server port")
+parser.add_argument("--debug", action="store_true", help="Flask debug mode")
+parser.add_argument("--config", type=str, help="Config JSON file for device IPs/ports")
 args = parser.parse_args()
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -58,99 +54,244 @@ logging.basicConfig(
 log = logging.getLogger("lab_server")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Import lab_api drivers (graceful fallback to stub mode if not installed)
+# Device discovery and loading
 # ─────────────────────────────────────────────────────────────────────────────
 STUB_MODE = False
 
+@dataclass
+class DeviceConfig:
+    """Runtime configuration for a device."""
+    device_id: str
+    ip: str
+    port: int
+    manual: bool = False  # True for manually added UDP devices
+
+class DeviceRegistry:
+    """
+    Dynamically loads and manages device drivers.
+    Discovers devices from lab_api modules.
+    """
+
+    def __init__(self):
+        self.devices: Dict[str, Dict[str, Any]] = {}  # device_id -> metadata + driver
+        self.device_configs: Dict[str, DeviceConfig] = {}  # device_id -> config
+        self._instances: Dict[str, Any] = {}  # device_id -> driver instance
+        self._lock = threading.Lock()
+        self._load_config_file()
+        self._discover_devices()
+
+    def _load_config_file(self):
+        """Load device configuration from JSON file if provided."""
+        if args.config and Path(args.config).exists():
+            try:
+                with open(args.config) as f:
+                    cfg = json.load(f)
+                    log.info(f"Loaded device config from {args.config}")
+                    for dev_id, dev_cfg in cfg.get("devices", {}).items():
+                        self.device_configs[dev_id] = DeviceConfig(
+                            device_id=dev_id,
+                            ip=dev_cfg.get("ip"),
+                            port=dev_cfg.get("port"),
+                            manual=dev_cfg.get("manual", False),
+                        )
+            except Exception as e:
+                log.warning(f"Failed to load config file {args.config}: {e}")
+
+    def _discover_devices(self):
+        """
+        Scan lab_api directory for device modules with device_config.py.
+        Load metadata and store for later use.
+        """
+        lab_api_path = Path(__file__).parent / "lab_api"
+        if not lab_api_path.exists():
+            log.warning(f"lab_api path not found: {lab_api_path}")
+            return
+
+        sys.path.insert(0, str(lab_api_path.parent))
+        sys.path.insert(0, str(lab_api_path))
+
+        # Scan for device modules
+        for item in lab_api_path.iterdir():
+            if not item.is_dir() or item.name.startswith("_"):
+                continue
+
+            config_file = item / "device_config.py"
+            if not config_file.exists():
+                continue
+
+            device_id = None
+            try:
+                spec = importlib.util.spec_from_file_location(f"device_config_{item.name}", config_file)
+                config_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(config_module)
+
+                device_id = getattr(config_module, "DEVICE_ID")
+                device_name = getattr(config_module, "DEVICE_NAME")
+                default_ip = getattr(config_module, "DEFAULT_IP")
+                default_port = getattr(config_module, "DEFAULT_PORT")
+                protocol = getattr(config_module, "PROTOCOL")
+                test_connection_fn = getattr(config_module, "test_connection")
+                get_info_fn = getattr(config_module, "get_device_info")
+
+                # Use configured values or defaults
+                device_cfg = self.device_configs.get(device_id)
+                if device_cfg:
+                    ip, port = device_cfg.ip, device_cfg.port
+                else:
+                    ip, port = default_ip, default_port
+                    device_cfg = DeviceConfig(device_id=device_id, ip=ip, port=port)
+                    self.device_configs[device_id] = device_cfg
+
+                # Store device metadata
+                self.devices[device_id] = {
+                    "id": device_id,
+                    "name": device_name,
+                    "module_name": item.name,
+                    "module_path": item,
+                    "config_module": config_module,
+                    "driver_class_name": getattr(config_module, "DEVICE_NAME"),
+                    "default_ip": default_ip,
+                    "default_port": default_port,
+                    "ip": ip,
+                    "port": port,
+                    "protocol": protocol,
+                    "test_connection": test_connection_fn,
+                    "get_info": get_info_fn,
+                    "driver": None,
+                }
+                log.info(f"Discovered device: {device_name} ({device_id}) @ {ip}:{port}")
+
+            except Exception as e:
+                log.warning(f"Failed to load device config from {item.name}: {e}")
+                continue
+
+    def get_available_devices(self) -> List[Dict[str, Any]]:
+        """
+        Return all discovered devices with connectivity status.
+        Marks each device as connected/disconnected based on reachability test.
+        """
+        available = []
+        for device_id, device_meta in self.devices.items():
+            ip = device_meta["ip"]
+            port = device_meta["port"]
+            protocol = device_meta["protocol"]
+
+            # Test connectivity
+            try:
+                is_reachable = device_meta["test_connection"](ip, port, timeout=1.0)
+            except Exception as e:
+                log.debug(f"Connectivity test for {device_id} failed: {e}")
+                is_reachable = False
+
+            # Return ALL discovered devices, marking connection status
+            info = device_meta["get_info"]()
+            info["connected"] = is_reachable
+            info["ip"] = ip
+            info["port"] = port
+            info["protocol"] = protocol
+            available.append(info)
+
+            if is_reachable:
+                log.info(f"Device {device_id} is reachable @ {ip}:{port}")
+            else:
+                log.info(f"Device {device_id} unreachable @ {ip}:{port} (configure IP/port to use)")
+
+        return available
+
+    def get_driver(self, device_id: str):
+        """
+        Get or create driver instance for device.
+        Lazy initialization with reconnect on error.
+        """
+        with self._lock:
+            if device_id in self._instances:
+                return self._instances[device_id]
+
+            if device_id not in self.devices:
+                raise RuntimeError(f"Unknown device: {device_id}")
+
+            device_meta = self.devices[device_id]
+            ip = device_meta["ip"]
+            port = device_meta["port"]
+
+            try:
+                # Import the device driver
+                module_name = device_meta["module_name"]
+                module_path = device_meta["module_path"]
+                sys.path.insert(0, str(module_path.parent))
+
+                # Import from __init__.py
+                init_file = module_path / "__init__.py"
+                spec = importlib.util.spec_from_file_location(f"{module_name}.__init__", init_file)
+                driver_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(driver_module)
+
+                # Get the driver class (should be exposed in __init__.py)
+                # Usually named after the model like MP711001, MP730027, etc.
+                driver_classes = [
+                    name for name in dir(driver_module)
+                    if not name.startswith("_") and name[0].isupper()
+                ]
+                if not driver_classes:
+                    raise RuntimeError(f"No driver class found in {module_name}")
+
+                DriverClass = getattr(driver_module, driver_classes[0])
+                log.info(f"Creating driver instance for {device_id} @ {ip}:{port}")
+                driver = DriverClass(ip, port=port, timeout=2)
+                self._instances[device_id] = driver
+                return driver
+
+            except Exception as e:
+                log.error(f"Failed to create driver for {device_id}: {e}")
+                raise RuntimeError(f"Failed to load driver for {device_id}: {e}")
+
+    def reset_driver(self, device_id: str):
+        """Reset driver instance (force reconnect on next use)."""
+        with self._lock:
+            if device_id in self._instances:
+                del self._instances[device_id]
+
+    def update_device_config(self, device_id: str, ip: str, port: int):
+        """Update IP/port configuration for a device."""
+        if device_id not in self.devices:
+            raise RuntimeError(f"Unknown device: {device_id}")
+
+        self.devices[device_id]["ip"] = ip
+        self.devices[device_id]["port"] = port
+        self.device_configs[device_id] = DeviceConfig(device_id=device_id, ip=ip, port=port)
+        self.reset_driver(device_id)
+        log.info(f"Updated {device_id} config to {ip}:{port}")
+
+    def save_config(self, filepath: str):
+        """Save current device configuration to JSON file."""
+        cfg = {
+            "devices": {
+                dev_id: asdict(dev_cfg)
+                for dev_id, dev_cfg in self.device_configs.items()
+            }
+        }
+        with open(filepath, "w") as f:
+            json.dump(cfg, f, indent=2)
+        log.info(f"Saved device config to {filepath}")
+
+
+# Initialize device registry
+registry = DeviceRegistry()
+
+# Try to load drivers; if they fail, fall back to stub mode
 try:
-    # lab_api package lives one directory up when running from repo root
-    repo_root = Path(__file__).resolve().parent
-    sys.path.insert(0, str(repo_root))
-    sys.path.insert(0, str(repo_root / "lab_api"))
-
-    from psu_device    import MP711001
-    from multimeter_device import MP730027
-    from dcload_device import MP71077x
-    log.info("lab_api drivers loaded OK")
-
-except ImportError as e:
-    log.warning(f"lab_api drivers not found ({e}). Running in STUB mode — "
-                "all API calls return simulated data.")
+    if not registry.devices:
+        log.warning("No device drivers discovered. Starting in STUB mode.")
+        STUB_MODE = True
+except Exception as e:
+    log.warning(f"Failed to load device drivers: {e}. Running in STUB mode.")
     STUB_MODE = True
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Device manager — lazy init, reconnect on error
-# ─────────────────────────────────────────────────────────────────────────────
-_lock = threading.Lock()
-
-class DeviceManager:
-    """Holds live driver instances. Re-creates them after connection errors."""
-
-    def __init__(self):
-        self._psu = None
-        self._mm  = None
-        self._dcl = None
-
-    # ── PSU ──────────────────────────────────────────────────────────────────
-    def psu(self) -> "MP711001":
-        with _lock:
-            if self._psu is None:
-                log.info(f"Connecting PSU @ {args.psu_ip}:{args.psu_port}")
-                self._psu = MP711001(args.psu_ip, port=args.psu_port, timeout=2)
-            return self._psu
-
-    def reset_psu(self):
-        with _lock:
-            self._psu = None
-
-    # ── Multimeter ───────────────────────────────────────────────────────────
-    def mm(self) -> "MP730027":
-        with _lock:
-            if self._mm is None:
-                log.info(f"Connecting MM  @ {args.mm_ip}:{args.mm_port}")
-                self._mm = MP730027(args.mm_ip, port=args.mm_port)
-            return self._mm
-
-    def reset_mm(self):
-        with _lock:
-            self._mm = None
-
-    # ── DC Load ──────────────────────────────────────────────────────────────
-    def dcl(self) -> "MP71077x":
-        with _lock:
-            if self._dcl is None:
-                log.info(f"Connecting DCL @ {args.dcl_ip}:{args.dcl_port}")
-                self._dcl = MP71077x(args.dcl_ip, port=args.dcl_port, timeout=0.5)
-            return self._dcl
-
-    def reset_dcl(self):
-        with _lock:
-            self._dcl = None
-
-
-dm = DeviceManager()
-
-
-def device_call(getter, reset_fn, fn, *a, **kw):
-    """
-    Helper: call fn(device, *a, **kw) with automatic reconnect on error.
-    Returns the result or raises RuntimeError.
-    """
-    for attempt in range(2):
-        try:
-            dev = getter()
-            return fn(dev, *a, **kw)
-        except (ConnectionError, OSError, TimeoutError) as e:
-            log.warning(f"Device call failed (attempt {attempt+1}): {e}")
-            reset_fn()
-            if attempt == 1:
-                raise RuntimeError(str(e)) from e
-            time.sleep(0.1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STUB implementations (used when drivers are not installed)
+# STUB implementations
 # ─────────────────────────────────────────────────────────────────────────────
 import math, random
 
@@ -205,7 +346,7 @@ def _stub_dcl_measure():
     if not s["load_on"]:
         return {"voltage": 0.0, "current": 0.0}
     mode = s["mode"]
-    sv   = s["set_value"]
+    sv = s["set_value"]
     if mode == "CC":
         i = _stub_noise(sv)
         v = _stub_noise(5.0)
@@ -225,7 +366,7 @@ def _stub_dcl_measure():
 # Flask app
 # ─────────────────────────────────────────────────────────────────────────────
 app = Flask(__name__, static_folder=".", static_url_path="")
-CORS(app)  # Allow browser requests from file:// or different port
+CORS(app)
 
 def ok(data: dict):
     return jsonify({"status": "ok", **data})
@@ -236,36 +377,146 @@ def err(msg: str, code: int = 500):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Serve the HTML frontend
+# Serve HTML frontend
 # ─────────────────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
     html_path = Path(__file__).parent / "lab_control.html"
     if html_path.exists():
         return send_from_directory(str(html_path.parent), "lab_control.html")
-    return "<h2>lab_control.html not found next to server.py</h2>", 404
+    return "<h2>lab_control.html not found</h2>", 404
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# PSU ENDPOINTS  →  /api/psu/...
-# HTML calls:
-#   GET  /api/psu/status
-#   POST /api/psu/channel/<ch>/voltage        body: {"voltage": <float>}
-#   POST /api/psu/channel/<ch>/current        body: {"current": <float>}
-#   POST /api/psu/channel/<ch>/output_on
-#   POST /api/psu/channel/<ch>/output_off
-#   GET  /api/psu/channel/<ch>/measure
-# ═════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
+# Device Discovery Endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/discover", methods=["GET"])
+def discover_devices():
+    """
+    Discover and return all available devices.
+    Tests connectivity to all configured devices.
+    Returns metadata for UI generation.
+    """
+    if STUB_MODE:
+        return ok({
+            "devices": [
+                {
+                    "id": "psu",
+                    "name": "MP711001",
+                    "fullName": "MP711001 Power Supply",
+                    "protocol": "TCP",
+                    "apiPrefix": "/api/psu",
+                    "iconClass": "icon-psu",
+                    "accentColor": "#00dca0",
+                    "channels": 4,
+                    "connected": True,
+                    "stub": True,
+                },
+                {
+                    "id": "mm",
+                    "name": "MP730027",
+                    "fullName": "MP730027 Multimeter",
+                    "protocol": "TCP",
+                    "apiPrefix": "/api/mm",
+                    "iconClass": "icon-mm",
+                    "accentColor": "#00b8e0",
+                    "connected": True,
+                    "stub": True,
+                },
+                {
+                    "id": "dcl",
+                    "name": "MP71077x",
+                    "fullName": "MP71077x DC Load",
+                    "protocol": "UDP",
+                    "apiPrefix": "/api/dcload",
+                    "iconClass": "icon-dcl",
+                    "accentColor": "#e07800",
+                    "connected": True,
+                    "stub": True,
+                },
+            ],
+            "stubMode": True,
+        })
+
+    available = registry.get_available_devices()
+    return ok({
+        "devices": available,
+        "stubMode": False,
+    })
+
+
+@app.route("/api/device/<device_id>/config", methods=["GET"])
+def get_device_config(device_id):
+    """Get current IP/port for a device."""
+    if device_id not in registry.devices:
+        return err(f"Unknown device: {device_id}", 404)
+
+    meta = registry.devices[device_id]
+    return ok({
+        "device_id": device_id,
+        "ip": meta["ip"],
+        "port": meta["port"],
+        "default_ip": meta["default_ip"],
+        "default_port": meta["default_port"],
+    })
+
+
+@app.route("/api/device/<device_id>/config", methods=["POST"])
+def set_device_config(device_id):
+    """Update IP/port for a device."""
+    if device_id not in registry.devices:
+        return err(f"Unknown device: {device_id}", 404)
+
+    body = request.get_json(silent=True) or {}
+    new_ip = body.get("ip")
+    new_port = body.get("port")
+
+    if not new_ip or not new_port:
+        return err("Missing 'ip' or 'port' in request body", 400)
+
+    try:
+        new_port = int(new_port)
+        registry.update_device_config(device_id, new_ip, new_port)
+        return ok({"device_id": device_id, "ip": new_ip, "port": new_port})
+    except Exception as e:
+        return err(str(e), 400)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Generic device API proxy (for extensibility)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def device_call(device_id: str, fn, *a, **kw):
+    """Helper: call fn(device, *a, **kw) with auto-reconnect on error."""
+    for attempt in range(2):
+        try:
+            if STUB_MODE:
+                # Return None for stub; handlers will use _stub_* functions
+                return None
+            driver = registry.get_driver(device_id)
+            return fn(driver, *a, **kw)
+        except (ConnectionError, OSError, TimeoutError) as e:
+            log.warning(f"Device call failed for {device_id} (attempt {attempt+1}): {e}")
+            registry.reset_driver(device_id)
+            if attempt == 1:
+                raise RuntimeError(str(e)) from e
+            time.sleep(0.1)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PSU ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.route("/api/psu/status")
 def psu_status():
     if STUB_MODE:
-        return ok({"device": "MP711001", "ip": args.psu_ip, "channels": 4, "stub": True})
+        return ok({"device": "MP711001", "channels": 4, "stub": True})
     try:
-        psu = dm.psu()
-        return ok({"device": "MP711001", "ip": args.psu_ip, "channels": 4})
+        registry.get_driver("psu")
+        return ok({"device": "MP711001", "channels": 4})
     except Exception as e:
-        dm.reset_psu()
+        registry.reset_driver("psu")
         return err(f"PSU not reachable: {e}")
 
 
@@ -276,15 +527,14 @@ def psu_set_voltage(ch):
     body = request.get_json(silent=True) or {}
     v = body.get("voltage")
     if v is None:
-        return err("Missing 'voltage' in body", 400)
+        return err("Missing 'voltage'", 400)
     v = float(v)
     if STUB_MODE:
         _stub_state["psu"]["channels"][ch]["voltage_set"] = v
         log.info(f"[STUB] PSU CH{ch} voltage → {v}V")
         return ok({"channel": ch, "voltage": v})
     try:
-        # use default arg binding to capture ch/v at call time, not closure time
-        device_call(dm.psu, dm.reset_psu, lambda d, _ch=ch, _v=v: d.set_voltage(_ch, _v))
+        device_call("psu", lambda d, _ch=ch, _v=v: d.set_voltage(_ch, _v))
         log.info(f"PSU CH{ch} voltage → {v}V")
         return ok({"channel": ch, "voltage": v})
     except Exception as e:
@@ -298,14 +548,14 @@ def psu_set_current(ch):
     body = request.get_json(silent=True) or {}
     i = body.get("current")
     if i is None:
-        return err("Missing 'current' in body", 400)
+        return err("Missing 'current'", 400)
     i = float(i)
     if STUB_MODE:
         _stub_state["psu"]["channels"][ch]["current_set"] = i
         log.info(f"[STUB] PSU CH{ch} current → {i}A")
         return ok({"channel": ch, "current": i})
     try:
-        device_call(dm.psu, dm.reset_psu, lambda d, _ch=ch, _i=i: d.set_current(_ch, _i))
+        device_call("psu", lambda d, _ch=ch, _i=i: d.set_current(_ch, _i))
         log.info(f"PSU CH{ch} current → {i}A")
         return ok({"channel": ch, "current": i})
     except Exception as e:
@@ -320,7 +570,7 @@ def psu_output_on(ch):
         _stub_state["psu"]["channels"][ch]["output"] = True
         return ok({"channel": ch, "output": True})
     try:
-        device_call(dm.psu, dm.reset_psu, lambda d, _ch=ch: d.output_on(_ch))
+        device_call("psu", lambda d, _ch=ch: d.output_on(_ch))
         log.info(f"PSU CH{ch} OUTPUT ON")
         return ok({"channel": ch, "output": True})
     except Exception as e:
@@ -335,7 +585,7 @@ def psu_output_off(ch):
         _stub_state["psu"]["channels"][ch]["output"] = False
         return ok({"channel": ch, "output": False})
     try:
-        device_call(dm.psu, dm.reset_psu, lambda d, _ch=ch: d.output_off(_ch))
+        device_call("psu", lambda d, _ch=ch: d.output_off(_ch))
         log.info(f"PSU CH{ch} OUTPUT OFF")
         return ok({"channel": ch, "output": False})
     except Exception as e:
@@ -349,8 +599,7 @@ def psu_measure(ch):
     if STUB_MODE:
         return ok(_stub_psu_measure(ch))
     try:
-        result = device_call(dm.psu, dm.reset_psu, lambda d, _ch=ch: d.measure(_ch))
-        # driver returns {"channel": int, "voltage": str|float, "current": str|float}
+        result = device_call("psu", lambda d, _ch=ch: d.measure(_ch))
         return ok({
             "channel": ch,
             "voltage": float(result.get("voltage", 0)),
@@ -360,50 +609,44 @@ def psu_measure(ch):
         return err(str(e))
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# MULTIMETER ENDPOINTS  →  /api/mm/...
-# HTML calls:
-#   GET  /api/mm/status
-#   GET  /api/mm/measure/<mode>
-#     modes: dc_voltage, ac_voltage, dc_current, ac_current,
-#            resistance, continuity, diode, capacitance, frequency
-# ═════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
+# MULTIMETER ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
 
 MM_MODE_MAP = {
-    "dc_voltage":  "measure_dc_voltage",
-    "ac_voltage":  "measure_ac_voltage",
-    "dc_current":  "measure_dc_current",
-    "ac_current":  "measure_ac_current",
-    "resistance":  "measure_resistance",
-    "continuity":  "measure_continuity",
-    "diode":       "measure_diode",
+    "dc_voltage": "measure_dc_voltage",
+    "ac_voltage": "measure_ac_voltage",
+    "dc_current": "measure_dc_current",
+    "ac_current": "measure_ac_current",
+    "resistance": "measure_resistance",
+    "continuity": "measure_continuity",
+    "diode": "measure_diode",
     "capacitance": "measure_capacitance",
-    "frequency":   "measure_frequency",
+    "frequency": "measure_frequency",
 }
 
 
 @app.route("/api/mm/status")
 def mm_status():
     if STUB_MODE:
-        return ok({"device": "MP730027", "ip": args.mm_ip, "stub": True})
+        return ok({"device": "MP730027", "stub": True})
     try:
-        dm.mm()
-        return ok({"device": "MP730027", "ip": args.mm_ip})
+        registry.get_driver("mm")
+        return ok({"device": "MP730027"})
     except Exception as e:
-        dm.reset_mm()
+        registry.reset_driver("mm")
         return err(f"MM not reachable: {e}")
 
 
 @app.route("/api/mm/measure/<mode>")
 def mm_measure(mode):
     if mode not in MM_MODE_MAP:
-        return err(f"Unknown mode '{mode}'. Valid: {list(MM_MODE_MAP)}", 400)
+        return err(f"Unknown mode '{mode}'", 400)
     if STUB_MODE:
         return ok(_stub_mm_measure(mode))
     try:
         method_name = MM_MODE_MAP[mode]
-        raw = device_call(dm.mm, dm.reset_mm, lambda d, _m=method_name: getattr(d, _m)())
-        # Driver returns a float or a string; normalise to float
+        raw = device_call("mm", lambda d, _m=method_name: getattr(d, _m)())
         value = float(raw) if raw is not None else 0.0
         log.debug(f"MM {mode} = {value}")
         return ok({"mode": mode, "value": value})
@@ -411,19 +654,9 @@ def mm_measure(mode):
         return err(str(e))
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# DC LOAD ENDPOINTS  →  /api/dcload/...
-# HTML calls:
-#   GET  /api/dcload/status
-#   POST /api/dcload/mode              body: {"mode": "CC"|"CV"|"CP"|"CR"}
-#   POST /api/dcload/set/current       body: {"value": <float>}
-#   POST /api/dcload/set/voltage       body: {"value": <float>}
-#   POST /api/dcload/set/power         body: {"value": <float>}
-#   POST /api/dcload/set/resistance    body: {"value": <float>}
-#   POST /api/dcload/load_on
-#   POST /api/dcload/load_off
-#   GET  /api/dcload/measure
-# ═════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
+# DC LOAD ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
 
 DCL_MODE_FN = {
     "CC": "set_mode_current",
@@ -433,22 +666,22 @@ DCL_MODE_FN = {
 }
 
 DCL_SET_FN = {
-    "current":    "set_ci_current",   # CC mode
-    "voltage":    "set_cv_voltage",   # CV mode
-    "power":      "set_cp_power",     # CP mode
-    "resistance": "set_cr_resistance",# CR mode
+    "current": "set_ci_current",
+    "voltage": "set_cv_voltage",
+    "power": "set_cp_power",
+    "resistance": "set_cr_resistance",
 }
 
 
 @app.route("/api/dcload/status")
 def dcl_status():
     if STUB_MODE:
-        return ok({"device": "MP71077x", "ip": args.dcl_ip, "stub": True})
+        return ok({"device": "MP71077x", "stub": True})
     try:
-        dm.dcl()
-        return ok({"device": "MP71077x", "ip": args.dcl_ip})
+        registry.get_driver("dcl")
+        return ok({"device": "MP71077x"})
     except Exception as e:
-        dm.reset_dcl()
+        registry.reset_driver("dcl")
         return err(f"DCLoad not reachable: {e}")
 
 
@@ -457,13 +690,13 @@ def dcl_set_mode():
     body = request.get_json(silent=True) or {}
     mode = body.get("mode", "").upper()
     if mode not in DCL_MODE_FN:
-        return err(f"Unknown mode '{mode}'. Valid: CC CV CP CR", 400)
+        return err(f"Unknown mode '{mode}'", 400)
     if STUB_MODE:
         _stub_state["dcl"]["mode"] = mode
         return ok({"mode": mode})
     try:
         fn_name = DCL_MODE_FN[mode]
-        device_call(dm.dcl, dm.reset_dcl, lambda d, _fn=fn_name: getattr(d, _fn)())
+        device_call("dcl", lambda d, _fn=fn_name: getattr(d, _fn)())
         log.info(f"DCLoad mode → {mode}")
         return ok({"mode": mode})
     except Exception as e:
@@ -473,11 +706,11 @@ def dcl_set_mode():
 @app.route("/api/dcload/set/<parameter>", methods=["POST"])
 def dcl_set_value(parameter):
     if parameter not in DCL_SET_FN:
-        return err(f"Unknown parameter '{parameter}'. Valid: current voltage power resistance", 400)
+        return err(f"Unknown parameter '{parameter}'", 400)
     body = request.get_json(silent=True) or {}
     value = body.get("value")
     if value is None:
-        return err("Missing 'value' in body", 400)
+        return err("Missing 'value'", 400)
     value = float(value)
     if STUB_MODE:
         _stub_state["dcl"]["set_value"] = value
@@ -485,7 +718,7 @@ def dcl_set_value(parameter):
         return ok({"parameter": parameter, "value": value})
     try:
         fn_name = DCL_SET_FN[parameter]
-        device_call(dm.dcl, dm.reset_dcl, lambda d, _fn=fn_name, _v=value: getattr(d, _fn)(_v))
+        device_call("dcl", lambda d, _fn=fn_name, _v=value: getattr(d, _fn)(_v))
         log.info(f"DCLoad {parameter} → {value}")
         return ok({"parameter": parameter, "value": value})
     except Exception as e:
@@ -498,7 +731,7 @@ def dcl_load_on():
         _stub_state["dcl"]["load_on"] = True
         return ok({"load": True})
     try:
-        device_call(dm.dcl, dm.reset_dcl, lambda d, *_: d.load_on())
+        device_call("dcl", lambda d, *_: d.load_on())
         log.info("DCLoad LOAD ON")
         return ok({"load": True})
     except Exception as e:
@@ -511,7 +744,7 @@ def dcl_load_off():
         _stub_state["dcl"]["load_on"] = False
         return ok({"load": False})
     try:
-        device_call(dm.dcl, dm.reset_dcl, lambda d, *_: d.load_off())
+        device_call("dcl", lambda d, *_: d.load_off())
         log.info("DCLoad LOAD OFF")
         return ok({"load": False})
     except Exception as e:
@@ -523,8 +756,7 @@ def dcl_measure():
     if STUB_MODE:
         return ok(_stub_dcl_measure())
     try:
-        result = device_call(dm.dcl, dm.reset_dcl, lambda d, *_: d.measure())
-        # driver returns {"voltage": float, "current": float}
+        result = device_call("dcl", lambda d, *_: d.measure())
         return ok({
             "voltage": float(result.get("voltage", 0)),
             "current": float(result.get("current", 0)),
@@ -534,33 +766,29 @@ def dcl_measure():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Health check  →  /health
+# Health & Config
 # ─────────────────────────────────────────────────────────────────────────────
+
 @app.route("/health")
 def health():
     return ok({
         "stub_mode": STUB_MODE,
-        "psu_ip":  args.psu_ip,
-        "mm_ip":   args.mm_ip,
-        "dcl_ip":  args.dcl_ip,
+        "devices_count": len(registry.devices),
     })
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Main
-# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     log.info("=" * 60)
-    log.info(f"  Lab API Server   port={args.port}   stub={STUB_MODE}")
-    log.info(f"  PSU  {args.psu_ip}:{args.psu_port}")
-    log.info(f"  MM   {args.mm_ip}:{args.mm_port}")
-    log.info(f"  DCL  {args.dcl_ip}:{args.dcl_port}")
-    log.info(f"  UI   http://localhost:{args.port}/")
+    log.info(f"  Lab API Server with Device Discovery")
+    log.info(f"  Port: {args.port}")
+    log.info(f"  Stub Mode: {STUB_MODE}")
+    log.info(f"  Devices Discovered: {len(registry.devices)}")
+    log.info(f"  UI: http://localhost:{args.port}/")
     log.info("=" * 60)
     app.run(
         host="0.0.0.0",
         port=args.port,
         debug=args.debug,
         threaded=True,
-        use_reloader=False,  # avoid double-init of device manager
+        use_reloader=False,
     )
