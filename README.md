@@ -5,7 +5,9 @@ A browser-based instrument control panel for the [lab_api](https://github.com/ma
 <img width="1765" height="891" alt="Bildschirmfoto vom 2026-05-30 14-23-44" src="https://github.com/user-attachments/assets/88afb25b-14d7-4c24-9108-6a195e161d12" />
 ## this repo contains the UI, API and device drivers.
 ---
-
+### inital implementation of dinymic device discovery
+<img width="1758" height="868" alt="Eingefügtes Bild" src="https://github.com/user-attachments/assets/3db30b2d-ef46-4fdf-bc84-9a32062c0a55" />
+CONFIG SAVING REMOVED FOR DEBUGGING PURPOSES ATM.
 ## Supported instruments
 
 | Device | Model | Protocol | Default address |
