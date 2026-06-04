@@ -57,7 +57,8 @@ print("[OK] Primary devices connected\n")
 psu.output_off(1)
 dcload.load_off()
 if awg_available:
-    awg.output_off()
+    awg.output_off(channel=1)
+    awg.output_off(channel=2)
 time.sleep(SETTLE_AFTER_OUTPUT_OFF)
 
 
@@ -98,34 +99,45 @@ if awg_available:
         print("AWG DEMO: Setting and Activating Waveforms on 2 Channels")
         print("=" * 70)
 
-        # Channel 1: 1 kHz sine wave
-        print("\n[Channel 1] 1 kHz sine wave with 2.5 V offset")
-        awg.set_waveform("SIN")
-        awg.set_frequency(1000)
-        awg.set_amplitude(3.3)
-        awg.set_dc_offset(2.5)
-        awg.set_phase(0)
-        print(f"  Waveform:  {awg.get_waveform()}")
-        print(f"  Frequency: {awg.get_frequency()} Hz")
-        print(f"  Amplitude: {awg.get_amplitude()} V")
-        print(f"  Offset:    {awg.get_dc_offset()} V")
-        print(f"  Phase:     {awg.get_phase()} °")
-
-        # Enable output
-        awg.output_on()
+        # --- Channel 1: 1 kHz sine wave ---
+        print("\n[Channel 1] 1 kHz sine wave, 3.3 Vpp, 2.5 V offset")
+        awg.set_waveform("SIN", channel=1)
+        awg.set_frequency(1000, channel=1)
+        awg.set_amplitude(3.3, channel=1)
+        awg.set_dc_offset(2.5, channel=1)
+        awg.set_phase(0, channel=1)
+        print(f"  Waveform:  {awg.get_waveform(channel=1)}")
+        print(f"  Frequency: {awg.get_frequency(channel=1)} Hz")
+        print(f"  Amplitude: {awg.get_amplitude(channel=1)} V")
+        print(f"  Offset:    {awg.get_dc_offset(channel=1)} V")
+        print(f"  Phase:     {awg.get_phase(channel=1)} °")
+        awg.output_on(channel=1)
         print("  Output:    ON")
-        time.sleep(1.0)
 
-        # Channel 2 note
-        print("\n[Channel 2] Not currently supported")
-        print("  Note: Only a single output channel is supported at this time.\n")
+        # --- Channel 2: 500 Hz square wave ---
+        print("\n[Channel 2] 500 Hz square wave, 5 Vpp, 50% duty cycle")
+        awg.set_waveform("SQU", channel=2)
+        awg.set_frequency(500, channel=2)
+        awg.set_amplitude(5.0, channel=2)
+        awg.set_dc_offset(0.0, channel=2)
+        awg.set_duty_cycle(50, channel=2)
+        # Enable output before readback so a slow query can't prevent activation
+        awg.output_on(channel=2)
+        print("  Output:     ON")
+        print(f"  Waveform:   {awg.get_waveform(channel=2)}")
+        print(f"  Frequency:  {awg.get_frequency(channel=2)} Hz")
+        print(f"  Amplitude:  {awg.get_amplitude(channel=2)} V")
+        print(f"  Offset:     {awg.get_dc_offset(channel=2)} V")
+        print( "  Duty cycle: 50 % (set only - readback not supported)")
 
-        # Keep output active for a moment
+        # Keep both outputs active for a moment
         time.sleep(2.0)
 
-        # Disable output
-        awg.output_off()
-        print("[AWG] Output disabled\n")
+        # Disable both outputs
+        awg.output_off(channel=1)
+        awg.output_off(channel=2)
+        print("\n[AWG] Both outputs disabled\n")
+
     except Exception as e:
         print(f"[ERROR] AWG demo failed: {e}")
         print("Continuing with other tests...\n")
@@ -295,7 +307,8 @@ print("=" * 70)
 # Cleanup
 if awg_available:
     try:
-        awg.output_off()
-        print("\n[CLEANUP] AWG output disabled")
+        awg.output_off(channel=1)
+        awg.output_off(channel=2)
+        print("\n[CLEANUP] AWG outputs disabled")
     except:
         pass
